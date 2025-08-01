@@ -61,7 +61,16 @@ LIRA 使用一个特殊设计的多层感知机（MLP），它能同时处理两
 
 1.  **加载数据与初始分区** (`main` 块):
     *   调用 `utils.load_data` 加载数据集。
-    *   调用 `utils.build_kmeans_index` 对数据进行 K-Means 聚类，获得初始的分区 (`data_2_bkt`) 和簇中心 (`kmeans.centroids`)。
+    *   调用 `utils.build_kmeans_index` 对数据进行 K-Means 聚类。此函数返回两个关键变量：
+        *   `kmeans.centroids`: 这是一个 Numpy 数组，存储了 K-Means 算法计算出的所有分区的中心点。
+            *   **数据结构**: 形状 (shape) 为 `[n_bkt, dim]` 的二维数组。
+            *   **`n_bkt`**: 分区的总数。
+            *   **`dim`**: 数据向量的原始维度。
+            *   **内容**: 每一行代表一个分区的中心向量。这是计算距离特征的基础。
+        *   `data_2_bkt`: 这是一个 Numpy 数组，记录了每个数据点所属的分区。
+            *   **数据结构**: 形状 (shape) 为 `[n_d, 1]` 的二维数组。
+            *   **`n_d`**: 数据集中数据点的总数。
+            *   **内容**: 数组中的每一个值是一个整数索引 `j`，表示第 `i` 个数据点被分配到了第 `j` 个分区。
 
 2.  **准备训练数据** (`main` 块):
     *   **计算真实标签 (Labels)**:
@@ -100,6 +109,35 @@ LIRA 使用一个特殊设计的多层感知机（MLP），它能同时处理两
 *   `get_scaled_dist`: **特征工程的核心**。计算查询/数据点到所有簇中心的距离，并使用 `StandardScaler` 进行归一化。归一化是保证神经网络稳定训练的关键步骤。
 *   `build_kmeans_index`: 进行 K-Means 聚类，其产出的簇中心点是计算距离特征所必需的。
 *   `create_inner_indexes`: 根据分区结果，为每个分区建立独立的 Faiss 索引（如 HNSW 或 FLAT），用于最终的搜索阶段。
+
+### 关键函数深度解析: `get_scaled_dist`
+
+此函数是为神经网络准备输入特征 `x_dist` 的核心。其重要性在于，原始的距离值可能分布范围很广，直接输入网络会导致训练不稳定。通过标准化，可以将特征缩放到一个更合适的范围。
+
+```python
+def get_scaled_dist(x_d, x_q, kmeans, n_bkt):
+    # 1. 计算训练数据点到所有簇中心的原始距离
+    distances_data = get_dist_cid(x_d, kmeans, n_bkt)
+
+    # 2. 计算查询点到所有簇中心的原始距离
+    distances_query = get_dist_cid(x_q, kmeans, n_bkt)
+
+    # 3. 初始化一个标准化工具
+    scaler = StandardScaler()
+
+    # 4. 在训练数据的距离上“学习”标准化参数
+    #    scaler.fit_transform() 会计算 distances_data 的均值和标准差，
+    #    然后用它们来标准化 distances_data。
+    distances_data_scaled = scaler.fit_transform(distances_data)
+
+    # 5. 使用“相同”的参数（从训练数据中学到的）来标准化查询距离
+    #    scaler.transform() 使用已经计算好的均值和标准差来变换
+    #    distances_query。这确保了训练和测试数据受到完全相同的缩放，
+    #    防止了数据泄露。
+    distances_query_scaled = scaler.transform(distances_query)
+
+    return distances_data_scaled, distances_query_scaled
+```
 
 ---
 
